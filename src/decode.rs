@@ -73,13 +73,22 @@ impl Builder {
 		self.link = link;
 	}
 
+	/// The space the last word left after it would end the line, so it is dropped.
 	fn line_break(&mut self) {
 		if self.hidden {
 			return;
 		}
 		self.flush_text();
+		self.trim_last_run();
 		if !self.runs.is_empty() {
 			self.runs.push(Run::LineBreak);
+		}
+	}
+
+	fn trim_last_run(&mut self) {
+		if let Some(Run::Text { text, .. }) = self.runs.last_mut() {
+			let trimmed = text.trim_end_matches(' ').len();
+			text.truncate(trimmed);
 		}
 	}
 
@@ -93,18 +102,21 @@ impl Builder {
 		self.runs.push(Run::Image(image));
 	}
 
-	/// Ends the block, dropping the space each word leaves after it and line breaks at its end.
+	/// Ends the block, dropping the space each word leaves after it and line breaks at its end. A paragraph's leading spaces go too, since VIEW wraps running text to the window; an example's are its indentation.
 	fn finish_block(&mut self) {
 		self.flush_text();
 		while matches!(self.runs.last(), Some(Run::LineBreak)) {
 			self.runs.pop();
 		}
-		if let Some(Run::Text { text, .. }) = self.runs.last_mut() {
-			let trimmed = text.trim_end().len();
-			text.truncate(trimmed);
+		self.trim_last_run();
+		let kind = self.kind.take().unwrap_or(BlockKind::Paragraph);
+		if kind == BlockKind::Paragraph
+			&& let Some(Run::Text { text, .. }) = self.runs.first_mut()
+		{
+			let start = text.len() - text.trim_start_matches(' ').len();
+			text.drain(..start);
 		}
 		if self.runs.iter().any(|run| !matches!(run, Run::Text { text, .. } if text.is_empty())) {
-			let kind = self.kind.take().unwrap_or(BlockKind::Paragraph);
 			self.blocks.push(Block { kind, runs: std::mem::take(&mut self.runs) });
 		}
 		self.runs.clear();
@@ -129,12 +141,34 @@ fn arg16(args: &[u8], at: usize) -> Option<usize> {
 	Some(usize::from(u16::from_le_bytes([*args.get(at)?, *args.get(at + 1)?])))
 }
 
+/// Whether the compiler left spacing off for the whole slot, which happens when an earlier panel opens an example and never closes it: the slot then has no toggles and puts an explicit space after most words.
+fn spaced_explicitly(slot: &Slot<'_>) -> bool {
+	let is_word = |byte: u8| usize::from(byte) < slot.words.len();
+	let (mut spaced, mut abutted) = (0, 0);
+	let mut index = 0;
+	while let Some(&byte) = slot.text.get(index) {
+		match byte {
+			TOGGLE_SPACING => return false,
+			ESCAPE => index += usize::from(slot.text.get(index + 1).copied().unwrap_or(0)),
+			_ if is_word(byte) => match slot.text.get(index + 1) {
+				Some(&SPACE) => spaced += 1,
+				Some(&next) if is_word(next) => abutted += 1,
+				_ => {}
+			},
+			_ => {}
+		}
+		index += 1;
+	}
+	spaced >= 3 && spaced > abutted
+}
+
 /// Decodes a panel made of `slots`, in order.
 pub fn decode(slots: &[Slot<'_>], context: &dyn Context) -> Vec<Block> {
 	let mut builder = Builder::default();
 	for slot in slots {
 		// Every slot starts with words spaced, unless it continues an example.
-		let mut spacing = builder.example != Some(BlockKind::Example);
+		let explicit = spaced_explicitly(slot);
+		let mut spacing = builder.example != Some(BlockKind::Example) && !explicit;
 		let mut index = 0;
 		while let Some(&byte) = slot.text.get(index) {
 			index += 1;
@@ -148,12 +182,12 @@ pub fn decode(slots: &[Slot<'_>], context: &dyn Context) -> Vec<Block> {
 			match byte {
 				PARAGRAPH => {
 					builder.finish_block();
-					spacing = builder.example != Some(BlockKind::Example);
+					spacing = builder.example != Some(BlockKind::Example) && !explicit;
 				}
 				TOGGLE_SPACING => spacing = !spacing,
 				LINE_BREAK => {
 					builder.line_break();
-					spacing = builder.example != Some(BlockKind::Example);
+					spacing = builder.example != Some(BlockKind::Example) && !explicit;
 				}
 				SPACE => builder.push_text(" "),
 				ESCAPE => {
