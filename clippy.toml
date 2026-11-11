@@ -1,0 +1,4 @@
+# Product and format names that read as prose, not as code items. Without this every
+# mention of them would have to be wrapped in backticks and would then render as inline
+# code in the docs.
+doc-valid-idents = ["OS/2", "IPFC", "WinHelp", "NewView", ".."]

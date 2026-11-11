@@ -1,0 +1,32 @@
+[package]
+name = "libinf"
+version = "0.1.0"
+description = "Pure-Rust reader for OS/2 Information Presentation Facility help files (.inf and .hlp)."
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/accessware/libinf"
+homepage = "https://github.com/accessware/libinf"
+documentation = "https://docs.rs/libinf"
+keywords = ["os2", "ipf", "inf", "help", "parser"]
+categories = ["parser-implementations", "filesystem"]
+exclude = [".claude/", "prek.toml", "rustfmt.toml"]
+
+[dependencies]
+oem_cp = "2.1.2"
+thiserror = "2.0.20"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
