@@ -102,12 +102,17 @@ pub enum Link {
 	Panel(usize),
 	/// A footnote, a pop-up panel, by its index in the table of contents.
 	Footnote(usize),
-	/// A program the link starts (`reftype=launch`).
-	Launch,
+	/// A program the link starts (`reftype=launch`), with its command line, which often opens a web page: `explore.exe http://...`.
+	Launch(String),
 	/// A message to the application showing the help (`reftype=inform`), which only means something inside that application.
-	Inform,
-	/// A panel in another help file (`reftype=hd database=...`), which this crate cannot follow.
-	OtherFile,
+	Inform(u16),
+	/// A panel in another help file (`reftype=hd database=...`).
+	OtherFile {
+		/// The other file's name, as the link gives it, usually without a folder.
+		file: Option<String>,
+		/// The name (`id` or `name`) of the panel it leads to, which [`InfFile::panel_by_name`](crate::InfFile::panel_by_name) finds once that file is open.
+		panel: String,
+	},
 }
 
 /// A picture placed in the text.

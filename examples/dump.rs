@@ -22,6 +22,10 @@ fn main() -> ExitCode {
 	};
 	println!("title: {}", book.title().unwrap_or("(none)"));
 	println!("kind: {:?}, code page: {}", book.kind(), book.code_page().number());
+	println!("named panels: {}, numbered panels: {}", book.names().len(), book.resources().len());
+	if !book.linked_files().is_empty() {
+		println!("links into: {}", book.linked_files().join(", "));
+	}
 	for (index, entry) in book.toc().iter().enumerate() {
 		let indent = "  ".repeat(usize::from(entry.level.saturating_sub(1)));
 		let hidden = if entry.hidden { " (hidden)" } else { "" };

@@ -20,6 +20,9 @@ pub struct InfFile {
 	dictionary: Vec<String>,
 	toc: Vec<TocEntry>,
 	slots: Vec<u32>,
+	names: Vec<(String, usize)>,
+	resources: Vec<(u16, usize)>,
+	linked_files: Vec<String>,
 }
 
 /// The table of contents entry flags.
@@ -52,7 +55,10 @@ impl InfFile {
 		let slots = (0..usize::from(header.slot_count))
 			.map(|slot| u32_at(&data, offset(header.slots_start) + slot * 4, "the slot table"))
 			.collect::<Result<_>>()?;
-		Ok(Self { data, header, code_page, title, dictionary, toc, slots })
+		let names = read_names(&data, &header, &dictionary);
+		let resources = read_resources(&data, &header);
+		let linked_files = read_linked_files(&data, &header, code_page);
+		Ok(Self { data, header, code_page, title, dictionary, toc, slots, names, resources, linked_files })
 	}
 
 	/// Whether the file is a book (`.inf`) or an application's help (`.hlp`).
@@ -77,6 +83,36 @@ impl InfFile {
 	#[must_use]
 	pub fn toc(&self) -> &[TocEntry] {
 		&self.toc
+	}
+
+	/// The panels that have a name (`id` or `name` in the IPF source), which links from other files and applications use, with each one's index in the table of contents.
+	#[must_use]
+	pub fn names(&self) -> &[(String, usize)] {
+		&self.names
+	}
+
+	/// The index in the table of contents of the panel named `name`, ignoring case as IPF does.
+	#[must_use]
+	pub fn panel_by_name(&self, name: &str) -> Option<usize> {
+		self.names.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(name)).map(|&(_, index)| index)
+	}
+
+	/// The panels that have a resource number (`res` in the IPF source), which applications open help by, with each one's index in the table of contents.
+	#[must_use]
+	pub fn resources(&self) -> &[(u16, usize)] {
+		&self.resources
+	}
+
+	/// The index in the table of contents of the panel with resource number `resource`.
+	#[must_use]
+	pub fn panel_by_resource(&self, resource: u16) -> Option<usize> {
+		self.resources.iter().find(|&&(candidate, _)| candidate == resource).map(|&(_, index)| index)
+	}
+
+	/// The other help files this one links into, as their names are written in it.
+	#[must_use]
+	pub fn linked_files(&self) -> &[String] {
+		&self.linked_files
 	}
 
 	/// The content of the panel at `index` in the table of contents.
@@ -138,9 +174,62 @@ impl InfFile {
 }
 
 impl Context for InfFile {
-	fn toc_title(&self, index: usize) -> Option<&str> {
-		self.toc.get(index).map(|entry| entry.title.as_str())
+	fn decode_text(&self, bytes: &[u8]) -> String {
+		self.code_page.decode(bytes).trim().to_string()
 	}
+
+	fn linked_file(&self, index: usize) -> Option<&str> {
+		self.linked_files.get(index).map(String::as_str)
+	}
+}
+
+/// Two arrays of the same length: first the keys, then the table of contents index each leads to. A damaged table yields what can be read of it, since it only matters for links from outside.
+fn read_pairs(data: &[u8], start: u32, count: u16) -> Vec<(u16, usize)> {
+	let start = offset(start);
+	let count = usize::from(count);
+	(0..count)
+		.map_while(|at| {
+			let key = u16_at(data, start + at * 2, "a panel table").ok()?;
+			let index = u16_at(data, start + (count + at) * 2, "a panel table").ok()?;
+			Some((key, usize::from(index)))
+		})
+		.collect()
+}
+
+/// Each name is stored once, as a word in the dictionary.
+fn read_names(data: &[u8], header: &Header, dictionary: &[String]) -> Vec<(String, usize)> {
+	read_pairs(data, header.name_start, header.name_count)
+		.into_iter()
+		.filter_map(|(word, index)| Some((dictionary.get(usize::from(word))?.clone(), index)))
+		.collect()
+}
+
+fn read_resources(data: &[u8], header: &Header) -> Vec<(u16, usize)> {
+	read_pairs(data, header.resource_start, header.resource_count)
+}
+
+/// The extended data block gives the count and offset of the list of other files links lead to, after the font list's. Each name has a length byte that counts itself.
+fn read_linked_files(data: &[u8], header: &Header, code_page: CodePage) -> Vec<String> {
+	let block = offset(header.extended_start);
+	if block == 0 {
+		return Vec::new();
+	}
+	let (Ok(count), Ok(start)) =
+		(u16_at(data, block + 6, "the extended data"), u32_at(data, block + 8, "the extended data"))
+	else {
+		return Vec::new();
+	};
+	let mut at = offset(start);
+	let mut files = Vec::new();
+	for _ in 0..count {
+		let Ok(len) = u8_at(data, at, "the list of linked files") else { break };
+		let Ok(name) = slice(data, at + 1, usize::from(len.saturating_sub(1)), "the list of linked files") else {
+			break;
+		};
+		files.push(code_page.decode(name).trim().to_string());
+		at += usize::from(len.max(1));
+	}
+	files
 }
 
 /// The NLS table opens with its size (two bytes), a type, a format and a value (two bytes), then the country and code page the book was written in.

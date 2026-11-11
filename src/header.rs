@@ -22,6 +22,10 @@ pub struct Header {
 	pub kind: Kind,
 	pub toc_count: u16,
 	pub toc_start: u32,
+	pub resource_count: u16,
+	pub resource_start: u32,
+	pub name_count: u16,
+	pub name_start: u32,
 	pub index_count: u16,
 	pub index_start: u32,
 	pub slot_count: u16,
@@ -31,6 +35,7 @@ pub struct Header {
 	pub image_start: u32,
 	pub nls_start: u32,
 	pub nls_len: u32,
+	pub extended_start: u32,
 	pub title: Vec<u8>,
 }
 
@@ -49,6 +54,10 @@ impl Header {
 			kind: if flags & 0x10 != 0 { Kind::Help } else { Kind::Book },
 			toc_count: field16(8)?,
 			toc_start: field32(18)?,
+			resource_count: field16(22)?,
+			resource_start: field32(24)?,
+			name_count: field16(28)?,
+			name_start: field32(30)?,
 			index_count: field16(34)?,
 			index_start: field32(36)?,
 			slot_count: field16(62)?,
@@ -58,6 +67,7 @@ impl Header {
 			image_start: field32(78)?,
 			nls_start: field32(83)?,
 			nls_len: field32(87)?,
+			extended_start: field32(91)?,
 			title: title[..title_len].to_vec(),
 		})
 	}

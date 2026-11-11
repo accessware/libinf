@@ -22,8 +22,10 @@ pub struct Slot<'a> {
 
 /// What [`decode`] needs from the rest of the file.
 pub trait Context {
-	/// The title of a table of contents entry, which an inlined reference puts in the text.
-	fn toc_title(&self, index: usize) -> Option<&str>;
+	/// Text in the file's code page, as a link's command line or target is.
+	fn decode_text(&self, bytes: &[u8]) -> String;
+	/// The name of another help file this one links into, by its number in the file's list.
+	fn linked_file(&self, index: usize) -> Option<&str>;
 }
 
 #[derive(Default)]
@@ -232,24 +234,20 @@ fn escape(builder: &mut Builder, spacing: &mut bool, code: u8, args: &[u8], cont
 				builder.image(ImageRef { offset: u32::from_le_bytes([offset[0], offset[1], offset[2], offset[3]]) });
 			}
 		}
-		// An inlined reference puts the referenced panel's title in the text, as a link to it.
-		0x0f => {
-			if let Some(toc) = arg16(args, 1)
-				&& let Some(title) = context.toc_title(toc)
-			{
-				let title = title.to_string();
-				let outer = builder.link.clone();
-				builder.set_link(Some(Link::Panel(toc)));
-				builder.push_text(&title);
-				if *spacing {
-					builder.push_text(" ");
-				}
-				builder.set_link(outer);
-			}
+		// The first byte's meaning is unknown; the command line follows.
+		0x10 => builder.set_link(Some(Link::Launch(
+			args.get(1..).map_or_else(String::new, |command| context.decode_text(command)),
+		))),
+		0x16 => builder
+			.set_link(Some(Link::Inform(arg16(args, 0).and_then(|value| u16::try_from(value).ok()).unwrap_or(0)))),
+		// The other file's number in the list, then the target panel's name with its length.
+		0x1f => {
+			let name = args.get(1).and_then(|&len| args.get(2..2 + usize::from(len)));
+			builder.set_link(Some(Link::OtherFile {
+				file: args.first().and_then(|&index| context.linked_file(usize::from(index))).map(ToString::to_string),
+				panel: name.map_or_else(String::new, |name| context.decode_text(name)),
+			}));
 		}
-		0x10 => builder.set_link(Some(Link::Launch)),
-		0x16 => builder.set_link(Some(Link::Inform)),
-		0x1f => builder.set_link(Some(Link::OtherFile)),
 		0x17 => {
 			builder.flush_text();
 			builder.hidden = true;
@@ -260,7 +258,7 @@ fn escape(builder: &mut Builder, spacing: &mut bool, code: u8, args: &[u8], cont
 			builder.example = Some(BlockKind::Lines);
 			*spacing = false;
 		}
-		// Margins, colours, fonts and the rest only change how VIEW draws the text.
+		// 0x0f opens a child window when the panel is shown, or with only three bytes puts a panel's title in the text, which real files only use beside child windows, where the title would be noise. Margins, colours, fonts and the rest only change how VIEW draws the text.
 		_ => {}
 	}
 }
