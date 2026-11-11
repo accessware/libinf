@@ -44,12 +44,14 @@ mod error;
 mod header;
 mod inf;
 mod panel;
+mod picture;
 
 pub use encoding::CodePage;
 pub use error::{InfError, Result};
 pub use header::Kind;
 pub use inf::InfFile;
 pub use panel::{Block, BlockKind, ImageRef, IndexEntry, Link, Panel, Run, Style, TocEntry};
+pub use picture::Picture;
 
 /// Whether `data` starts like an IPF help file, to tell one from a Windows setup file or a WinHelp file sharing its extension.
 #[must_use]

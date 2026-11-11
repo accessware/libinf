@@ -6,7 +6,8 @@ use crate::{
 	decode::{self, Context, Slot},
 	encoding::CodePage,
 	header::{Header, Kind},
-	panel::{IndexEntry, Panel, TocEntry},
+	panel::{ImageRef, IndexEntry, Panel, TocEntry},
+	picture::{self, Picture},
 };
 
 /// An OS/2 help file, read into memory.
@@ -102,6 +103,18 @@ impl InfFile {
 			})
 			.collect::<Result<_>>()?;
 		Ok(Slot { text, words })
+	}
+
+	/// The picture a panel places at `image`.
+	///
+	/// # Errors
+	///
+	/// Returns an error if the picture runs past the end of the file, or is stored in a way this crate can't decode.
+	pub fn picture(&self, image: ImageRef) -> Result<Picture> {
+		let at = offset(self.header.image_start)
+			.checked_add(offset(image.offset))
+			.ok_or(InfError::Truncated("a picture"))?;
+		picture::read(&self.data, at)
 	}
 
 	/// The book's index, in the order the file stores it, which is alphabetical.

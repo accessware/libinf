@@ -18,15 +18,18 @@ fn main() -> libinf::Result<()> {
 }
 ```
 
-There is a worked example in `examples/dump.rs`:
+There are worked examples in `examples/`: `dump` prints a file's contents and text, and `pictures` saves its pictures as bitmaps.
 
 ```sh
 cargo run --example dump -- cmdref.inf
+cargo run --example pictures -- cmdref.inf pictures/
 ```
 
 ## The format
 
 IBM never documented the compiled format. This crate follows Carl Hauser and Marcus Gröber's reverse-engineered description, version 2B (1994), checked against real files.
+
+Pictures are OS/2 bitmaps, compressed with LZW, with two kinds of run-length encoding, or not at all. The LZW scheme follows the EDM2 article "Inside INF"; the rest was worked out from real files. `InfFile::picture` decodes one, and `Picture::to_bmp` turns it into a Windows bitmap.
 
 OS/2 `.hlp` files have nothing to do with WinHelp's, and `.inf` is also the extension of Windows setup files. All IPF files start with `HSP`; `libinf::is_ipf` checks for it.
 

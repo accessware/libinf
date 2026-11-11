@@ -18,6 +18,9 @@ pub enum InfError {
 	/// A table of contents entry the caller asked for does not exist.
 	#[error("there is no table of contents entry {0}")]
 	NoSuchEntry(usize),
+	/// A picture is stored in a way this crate can't decode, such as a metafile.
+	#[error("the picture is {0}, which this crate can't decode")]
+	UnsupportedPicture(&'static str),
 }
 
 /// The result of reading a help file.
