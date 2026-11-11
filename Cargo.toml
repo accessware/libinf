@@ -14,6 +14,7 @@ categories = ["parser-implementations", "filesystem"]
 exclude = [".claude/", "prek.toml", "rustfmt.toml"]
 
 [dependencies]
+encoding_rs = "0.8.44"
 oem_cp = "2.1.2"
 thiserror = "2.0.20"
 

@@ -21,7 +21,7 @@ fn main() -> ExitCode {
 		}
 	};
 	println!("title: {}", book.title().unwrap_or("(none)"));
-	println!("kind: {:?}, code page: {:?}", book.kind(), book.code_page());
+	println!("kind: {:?}, code page: {}", book.kind(), book.code_page().number());
 	for (index, entry) in book.toc().iter().enumerate() {
 		let indent = "  ".repeat(usize::from(entry.level.saturating_sub(1)));
 		let hidden = if entry.hidden { " (hidden)" } else { "" };

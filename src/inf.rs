@@ -44,7 +44,7 @@ impl InfFile {
 	/// Returns an error if `data` is not an IPF help file, or its tables run past its end.
 	pub fn from_bytes(data: Vec<u8>) -> Result<Self> {
 		let header = Header::read(&data)?;
-		let code_page = CodePage::Cp850;
+		let code_page = code_page(&data, &header);
 		let title = code_page.decode(&header.title).trim().to_string();
 		let dictionary = read_dictionary(&data, &header, code_page)?;
 		let toc = read_toc(&data, &header, code_page)?;
@@ -128,6 +128,14 @@ impl Context for InfFile {
 	fn toc_title(&self, index: usize) -> Option<&str> {
 		self.toc.get(index).map(|entry| entry.title.as_str())
 	}
+}
+
+/// The NLS table opens with its size (two bytes), a type, a format and a value (two bytes), then the country and code page the book was written in.
+fn code_page(data: &[u8], header: &Header) -> CodePage {
+	if header.nls_len < 12 {
+		return CodePage::DEFAULT;
+	}
+	u16_at(data, offset(header.nls_start) + 8, "the NLS table").map_or(CodePage::DEFAULT, CodePage::new)
 }
 
 /// Each word is stored with a length byte that counts itself.
