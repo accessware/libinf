@@ -262,3 +262,113 @@ fn escape(builder: &mut Builder, spacing: &mut bool, code: u8, args: &[u8], cont
 		_ => {}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::panel::{Run, Style};
+
+	struct Book;
+
+	impl Context for Book {
+		fn decode_text(&self, bytes: &[u8]) -> String {
+			String::from_utf8_lossy(bytes).into_owned()
+		}
+
+		fn linked_file(&self, index: usize) -> Option<&str> {
+			(index == 0).then_some("OTHER.INF")
+		}
+	}
+
+	const WORDS: [&str; 6] = ["Hello", "world", ".", "Next", "line", " "];
+
+	fn text_of(text: &[u8]) -> Vec<String> {
+		decode(&[Slot { text, words: WORDS.to_vec() }], &Book).iter().map(Block::text).collect()
+	}
+
+	fn runs_of(text: &[u8]) -> Vec<Run> {
+		decode(&[Slot { text, words: WORDS.to_vec() }], &Book).into_iter().flat_map(|block| block.runs).collect()
+	}
+
+	fn link_of(escape: &[u8]) -> Option<Link> {
+		let mut text = escape.to_vec();
+		text.push(0);
+		runs_of(&text).into_iter().find_map(|run| match run {
+			Run::Text { link, .. } => link,
+			_ => None,
+		})
+	}
+
+	#[test]
+	fn words_are_spaced_and_the_space_before_the_end_is_dropped() {
+		assert_eq!(text_of(&[0, 1, PARAGRAPH, 3, 4]), ["Hello world", "Next line"]);
+	}
+
+	#[test]
+	fn the_toggle_abuts_the_words_after_it_until_it_is_flipped_back() {
+		// IPFC writes `CONFIG.SYS.` as the word before, a toggle, `CONFIG . SYS`, a toggle and `.`.
+		assert_eq!(text_of(&[0, TOGGLE_SPACING, 1, 2, 1, TOGGLE_SPACING, 2, 3]), ["Hello world.world. Next"]);
+	}
+
+	#[test]
+	fn a_line_break_ends_the_line_and_turns_spacing_back_on() {
+		assert_eq!(text_of(&[TOGGLE_SPACING, 0, LINE_BREAK, 3, 4]), ["Hello\nNext line"]);
+	}
+
+	#[test]
+	fn an_example_keeps_its_spaces_and_lines() {
+		let text = [ESCAPE, 2, 0x0b, SPACE, SPACE, 0, SPACE, 1, LINE_BREAK, 3, ESCAPE, 2, 0x0c, 4];
+		let blocks = decode(&[Slot { text: &text, words: WORDS.to_vec() }], &Book);
+		assert_eq!(blocks[0].kind, BlockKind::Example);
+		assert_eq!(blocks[0].text(), "  Hello world\nNext");
+		assert_eq!(blocks[1].text(), "line");
+	}
+
+	#[test]
+	fn a_slot_spaced_by_hand_is_read_with_spacing_off() {
+		assert_eq!(
+			text_of(&[0, SPACE, 1, 2, SPACE, 3, SPACE, 4, PARAGRAPH, 3, SPACE, 4]),
+			["Hello world. Next line", "Next line"]
+		);
+	}
+
+	#[test]
+	fn styles_split_runs() {
+		let runs = runs_of(&[0, ESCAPE, 3, 0x04, 2, 1, ESCAPE, 3, 0x04, 0, 3]);
+		let styles: Vec<(String, bool)> = runs
+			.into_iter()
+			.filter_map(|run| match run {
+				Run::Text { text, style, .. } => Some((text, style.bold)),
+				_ => None,
+			})
+			.collect();
+		assert_eq!(styles, [("Hello ".into(), false), ("world ".into(), true), ("Next".into(), false)]);
+		assert_eq!(style(2), Style { bold: true, italic: false, underline: false });
+	}
+
+	#[test]
+	fn links_carry_their_targets() {
+		assert_eq!(link_of(&[ESCAPE, 4, 0x05, 7, 0]), Some(Link::Panel(7)));
+		assert_eq!(link_of(&[ESCAPE, 4, 0x07, 9, 0]), Some(Link::Footnote(9)));
+		assert_eq!(link_of(&[ESCAPE, 4, 0x16, 0x88, 0x13]), Some(Link::Inform(5000)));
+		let launch = [&[ESCAPE, 11, 0x10, 11][..], b"view.exe"].concat();
+		assert_eq!(link_of(&launch), Some(Link::Launch("view.exe".into())));
+		let other = [&[ESCAPE, 8, 0x1f, 0, 4][..], b"BM64"].concat();
+		assert_eq!(link_of(&other), Some(Link::OtherFile { file: Some("OTHER.INF".into()), panel: "BM64".into() }));
+	}
+
+	#[test]
+	fn a_child_window_puts_nothing_in_the_text() {
+		assert_eq!(text_of(&[0, ESCAPE, 7, 0x0f, 0x0b, 1, 0, 1, 0, ESCAPE, 5, 0x0f, 4, 1, 0, 1]), ["Hello world"]);
+	}
+
+	#[test]
+	fn hidden_text_is_left_out() {
+		assert_eq!(text_of(&[0, ESCAPE, 2, 0x17, 1, ESCAPE, 2, 0x18, 3]), ["Hello Next"]);
+	}
+
+	#[test]
+	fn a_damaged_slot_stops_rather_than_panicking() {
+		assert_eq!(text_of(&[0, 200, ESCAPE, 40, 0x05]), ["Hello"]);
+	}
+}

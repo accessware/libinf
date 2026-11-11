@@ -320,3 +320,145 @@ fn unpack_bit_runs(strip: &[u8], pixels: &mut Pixels) {
 		}
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn decoded(limit: usize, row: usize, decode: impl FnOnce(&mut Pixels)) -> Vec<u8> {
+		let mut pixels = Pixels::new(limit, row);
+		decode(&mut pixels);
+		pixels.bytes
+	}
+
+	/// Packs codes high bit first, widening as the decoder does.
+	fn pack(codes: &[u16]) -> Vec<u8> {
+		let (mut bits, mut next, mut width) = (Vec::new(), 258_u32, 9);
+		for (index, &code) in codes.iter().enumerate() {
+			bits.extend((0..width).rev().map(|bit| (code >> bit) & 1 == 1));
+			if code == 256 {
+				(next, width) = (258, 9);
+			} else if index > 0 && codes[index - 1] != 256 && code != 257 {
+				next += 1;
+				if next + 1 >= 1 << width && width < 12 {
+					width += 1;
+				}
+			}
+		}
+		bits.chunks(8)
+			.map(|byte| byte.iter().enumerate().fold(0, |acc, (at, &bit)| acc | u8::from(bit) << (7 - at)))
+			.collect()
+	}
+
+	#[test]
+	fn lzw_builds_strings_from_earlier_codes() {
+		let block = pack(&[u16::from(b'A'), u16::from(b'B'), 258, 257]);
+		assert_eq!(decoded(16, 4, |pixels| unpack_lzw(&block, pixels)), b"ABAB");
+	}
+
+	#[test]
+	fn lzw_reads_a_code_used_as_it_is_defined() {
+		let block = pack(&[u16::from(b'A'), 258, 257]);
+		assert_eq!(decoded(16, 4, |pixels| unpack_lzw(&block, pixels)), b"AAA");
+	}
+
+	#[test]
+	fn lzw_starts_over_after_a_clear() {
+		let block = pack(&[u16::from(b'A'), 256, u16::from(b'B'), 257]);
+		assert_eq!(decoded(16, 4, |pixels| unpack_lzw(&block, pixels)), b"AB");
+	}
+
+	#[test]
+	fn lzw_widens_codes_as_the_table_grows() {
+		let mut codes: Vec<u16> = (0..300).map(|byte| byte % 256).collect();
+		codes.push(257);
+		let expected: Vec<u8> = (0..300_u16).map(|byte| u8::try_from(byte % 256).unwrap()).collect();
+		assert_eq!(decoded(1000, 4, |pixels| unpack_lzw(&pack(&codes), pixels)), expected);
+	}
+
+	#[test]
+	fn runs_repeat_copy_fill_and_dither() {
+		let block = [2, 7, 0x81, 1, 2, 0x80, 0, 2, 0, 0x80, 1, 1, 0, 0x80, 2, 5, 6];
+		let expected = [7, 7, 7, 1, 2, 0, 0, 0, 0xff, 0xff, 5, 6, 5, 6, 5, 6];
+		assert_eq!(decoded(64, 4, |pixels| unpack_runs(&block, pixels)), expected);
+	}
+
+	#[test]
+	fn output_never_grows_past_the_picture() {
+		assert_eq!(decoded(5, 4, |pixels| unpack_runs(&[0x7f, 9], pixels)).len(), 5);
+	}
+
+	#[test]
+	fn pairs_repeat_values() {
+		assert_eq!(decoded(16, 4, |pixels| read_pairs(&[2, 9, 1, 4, 0, 5], pixels)), [9, 9, 4]);
+	}
+
+	#[test]
+	fn bit_runs_are_ones_unless_their_top_bit_is_set() {
+		assert_eq!(decoded(16, 4, |pixels| unpack_bit_runs(&[0x03, 0x85], pixels)), [0b1110_0000]);
+	}
+
+	#[test]
+	fn strips_are_told_from_pairs_by_how_they_add_up() {
+		// Two rows of four bytes, in strips of one row: one stored, one as pairs.
+		let body = [1, 0, 0, 0, 1, 2, 3, 4, 2, 0, 4, 8];
+		let mut pixels = Pixels::new(8, 4);
+		assert!(read_strips(&body, &mut pixels, 2, false));
+		assert_eq!(pixels.bytes, [1, 2, 3, 4, 8, 8, 8, 8]);
+		assert!(!read_strips(&[4, 9, 2, 1], &mut Pixels::new(8, 4), 2, false));
+	}
+
+	fn picture_bytes(magic: [u8; 2], body: &[u8]) -> Vec<u8> {
+		let mut data = magic.to_vec();
+		data.extend_from_slice(&[0; 12]);
+		data.extend_from_slice(&12_u32.to_le_bytes());
+		for field in [2_u16, 2, 1, 1] {
+			data.extend_from_slice(&field.to_le_bytes());
+		}
+		data.extend_from_slice(&[0, 0, 0, 0xff, 0xff, 0xff]);
+		data.extend_from_slice(&u32::try_from(body.len()).unwrap().to_le_bytes());
+		data.extend_from_slice(body);
+		data
+	}
+
+	#[test]
+	fn a_packed_picture_reads_its_blocks() {
+		// Two stored blocks of one row each; a block's length counts its type byte.
+		let body = [4, 0, 5, 0, 0, 0x80, 0, 0, 0, 5, 0, 0, 0x40, 0, 0, 0];
+		let picture = read(&picture_bytes(*b"bM", &body), 0).unwrap();
+		assert_eq!((picture.width, picture.height, picture.bits_per_pixel), (2, 2, 1));
+		assert_eq!(picture.palette, [[0, 0, 0], [0xff, 0xff, 0xff]]);
+		assert_eq!(picture.pixels, [0x80, 0, 0, 0, 0x40, 0, 0, 0]);
+	}
+
+	#[test]
+	fn an_old_picture_stored_whole_or_as_pairs() {
+		let stored = read(&picture_bytes(*b"BM", &[0xc0, 0, 0, 0, 0x40, 0, 0, 0]), 0).unwrap();
+		assert_eq!(stored.pixels, [0xc0, 0, 0, 0, 0x40, 0, 0, 0]);
+		let pairs = read(&picture_bytes(*b"BM", &[1, 0xc0, 3, 0, 4, 0]), 0).unwrap();
+		assert_eq!(pairs.pixels, [0xc0, 0, 0, 0, 0, 0, 0, 0]);
+	}
+
+	#[test]
+	fn other_pictures_are_refused() {
+		assert!(matches!(read(&picture_bytes(*b"mf", &[]), 0), Err(InfError::UnsupportedPicture(_))));
+		assert!(matches!(read(b"bM", 0), Err(InfError::Truncated(_))));
+	}
+
+	#[test]
+	fn a_bitmap_file_has_its_headers_and_colours() {
+		let picture = Picture {
+			width: 2,
+			height: 1,
+			bits_per_pixel: 1,
+			palette: vec![[1, 2, 3], [4, 5, 6]],
+			pixels: vec![0x80, 0, 0, 0],
+		};
+		let bmp = picture.to_bmp();
+		assert_eq!(&bmp[..2], b"BM");
+		assert_eq!(u32::from_le_bytes(bmp[2..6].try_into().unwrap()), 66);
+		assert_eq!(u32::from_le_bytes(bmp[10..14].try_into().unwrap()), 62);
+		assert_eq!(&bmp[54..62], [3, 2, 1, 0, 6, 5, 4, 0]);
+		assert_eq!(&bmp[62..], [0x80, 0, 0, 0]);
+	}
+}

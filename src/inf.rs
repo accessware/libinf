@@ -294,3 +294,126 @@ fn read_toc(data: &[u8], header: &Header, code_page: CodePage) -> Result<Vec<Toc
 		})
 		.collect()
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// Lays out a two-panel book the way IPFC does, patching each table's place into the header as it goes.
+	struct Writer(Vec<u8>);
+
+	impl Writer {
+		fn here(&self) -> u32 {
+			u32::try_from(self.0.len()).unwrap()
+		}
+
+		fn set16(&mut self, at: usize, value: u16) {
+			self.0[at..at + 2].copy_from_slice(&value.to_le_bytes());
+		}
+
+		fn set32(&mut self, at: usize, value: u32) {
+			self.0[at..at + 4].copy_from_slice(&value.to_le_bytes());
+		}
+
+		fn push16(&mut self, values: &[u16]) {
+			for value in values {
+				self.0.extend_from_slice(&value.to_le_bytes());
+			}
+		}
+
+		/// Strings with a length byte that counts itself, as the dictionary and the list of linked files store them.
+		fn push_counted(&mut self, strings: &[&str]) {
+			for string in strings {
+				self.0.push(u8::try_from(string.len() + 1).unwrap());
+				self.0.extend_from_slice(string.as_bytes());
+			}
+		}
+	}
+
+	fn book() -> Vec<u8> {
+		let mut file = Writer(vec![0; 155]);
+		file.0[..4].copy_from_slice(b"HSP\x01");
+		file.0[107..116].copy_from_slice(b"Test book");
+		file.set32(72 + 2, file.here());
+		file.set16(72, 4);
+		file.push_counted(&["Hello", "world", "Second", "PANEL_TWO"]);
+		let mut slots = Vec::new();
+		for (words, text) in [(&[0_u16, 1][..], &[0_u8, 1][..]), (&[2][..], &[0][..])] {
+			let dictionary = file.here();
+			file.push16(words);
+			slots.push(file.here());
+			file.0.push(0);
+			file.0.extend_from_slice(&dictionary.to_le_bytes());
+			file.0.push(u8::try_from(words.len()).unwrap());
+			file.push16(&[u16::try_from(text.len()).unwrap()]);
+			file.0.extend_from_slice(text);
+		}
+		file.set16(62, 2);
+		file.set32(64, file.here());
+		for slot in slots {
+			file.0.extend_from_slice(&slot.to_le_bytes());
+		}
+		let mut entries = Vec::new();
+		for (flags, slot, title) in [(0x81_u8, 0_u16, "One"), (0x42, 1, "Two")] {
+			entries.push(file.here());
+			file.0.extend_from_slice(&[u8::try_from(5 + title.len()).unwrap(), flags, 1]);
+			file.push16(&[slot]);
+			file.0.extend_from_slice(title.as_bytes());
+		}
+		file.set16(8, 2);
+		file.set32(18, file.here());
+		for entry in entries {
+			file.0.extend_from_slice(&entry.to_le_bytes());
+		}
+		file.set16(22, 1);
+		file.set32(24, file.here());
+		file.push16(&[42, 1]);
+		file.set16(28, 1);
+		file.set32(30, file.here());
+		file.push16(&[3, 1]);
+		file.set16(34, 1);
+		file.set32(36, file.here());
+		file.0.extend_from_slice(&[8, 1, 0, 0, 0]);
+		file.0.extend_from_slice(b"greeting");
+		let files = file.here();
+		file.push_counted(&["OTHER.INF"]);
+		file.set32(91, file.here());
+		let block = file.0.len();
+		file.0.extend_from_slice(&[0; 64]);
+		file.set16(block + 6, 1);
+		file.set32(block + 8, files);
+		file.0
+	}
+
+	#[test]
+	fn a_book_reads_its_contents_and_tables() {
+		let book = InfFile::from_bytes(book()).unwrap();
+		assert_eq!(book.title(), Some("Test book"));
+		assert_eq!(book.kind(), Kind::Book);
+		assert_eq!(book.code_page(), CodePage::DEFAULT);
+		let toc: Vec<_> = book
+			.toc()
+			.iter()
+			.map(|entry| (entry.title.as_str(), entry.level, entry.hidden, entry.has_children))
+			.collect();
+		assert_eq!(toc, [("One", 1, false, true), ("Two", 2, true, false)]);
+		assert_eq!(book.panel(0).unwrap().text(), "Hello world");
+		assert_eq!(book.panel(1).unwrap().text(), "Second");
+		assert!(matches!(book.panel(2), Err(InfError::NoSuchEntry(2))));
+		assert_eq!(book.panel_by_name("panel_two"), Some(1));
+		assert_eq!(book.panel_by_resource(42), Some(1));
+		assert_eq!(book.panel_by_resource(7), None);
+		assert_eq!(book.linked_files(), ["OTHER.INF"]);
+		let index = book.index().unwrap();
+		assert_eq!((index[0].term.as_str(), index[0].panel, index[0].subentry), ("greeting", 0, false));
+	}
+
+	#[test]
+	fn other_files_are_refused_and_damaged_ones_report_where() {
+		assert!(matches!(InfFile::from_bytes(b"[Version]\r\n".to_vec()), Err(InfError::BadMagic)));
+		assert!(!crate::is_ipf(b"?_\x03\x00"));
+		let mut cut = book();
+		cut.truncate(200);
+		assert!(matches!(InfFile::from_bytes(cut), Err(InfError::Truncated(_))));
+	}
+}
